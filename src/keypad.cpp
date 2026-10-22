@@ -17,9 +17,17 @@ static const char keymap[4][4] = {
 static const uint8_t rowPins[4] = {KEYPAD_ROW_1, KEYPAD_ROW_2, KEYPAD_ROW_3, KEYPAD_ROW_4};
 static const uint8_t colPins[4] = {KEYPAD_COL_1, KEYPAD_COL_2, KEYPAD_COL_3, KEYPAD_COL_4};
 
+enum KeypadState {
+  STATE_CHOOSE_SLOT,
+  STATE_ENTER_OTP
+};
+
+static KeypadState keypadState = STATE_CHOOSE_SLOT;
+static String selectedSlot = "";
 static String otpBuffer = "";
 static unsigned long messageResetTime = 0;
 static bool showingFeedback = false;
+static bool lastVerifySuccess = false;
 
 // Hàm quét ma trận phím trực tiếp
 static char scanKeypadMatrix() {
@@ -75,16 +83,17 @@ static char getDebouncedKey() {
   return 0;
 }
 
-static void verifyOtpWithServer(const String& otp) {
+static void verifyOtpWithServer(const String& slot, const String& otp) {
   if (!isWiFiConnected()) {
     lcdShowError("Khong co Wi-Fi");
     showingFeedback = true;
+    lastVerifySuccess = false;
     messageResetTime = millis() + 2500;
     return;
   }
 
   lcdShowVerifying();
-  Serial.printf("[KEYPAD] Dang gui ma OTP '%s' len Backend kiem tra...\n", otp.c_str());
+  Serial.printf("[KEYPAD] Dang gui ma OTP '%s' cua ngan '%s' len Backend kiem tra...\n", otp.c_str(), slot.c_str());
 
   HTTPClient http;
   String url = String(BACKEND_BASE_URL) + "/verify-otp";
@@ -94,6 +103,7 @@ static void verifyOtpWithServer(const String& otp) {
 
   StaticJsonDocument<256> reqDoc;
   reqDoc["otp"] = otp;
+  reqDoc["slot_code"] = slot;
 
   String reqBody;
   serializeJson(reqDoc, reqBody);
@@ -104,84 +114,145 @@ static void verifyOtpWithServer(const String& otp) {
 
   Serial.printf("[KEYPAD] Phan hoi HTTP %d: %s\n", httpCode, response.c_str());
 
-  if (httpCode == 200 || httpCode == 201) {
-    StaticJsonDocument<512> resDoc;
-    DeserializationError err = deserializeJson(resDoc, response);
-    if (!err && resDoc["success"]) {
-      String slotCode = resDoc["data"]["slot_code"].as<String>();
-      if (slotCode.length() == 0) slotCode = "A01";
+  StaticJsonDocument<512> resDoc;
+  deserializeJson(resDoc, response);
 
-      Serial.printf("[KEYPAD] OTP hop le! Mo ngan %s\n", slotCode.c_str());
-      lcdShowSuccess(slotCode);
-      openSlot(slotCode, SERVO_AUTO_LOCK_DELAY_MS);
+  if (httpCode == 200 || httpCode == 201) {
+    if (resDoc["success"]) {
+      String openSlotCode = resDoc["data"]["slot_code"].as<String>();
+      if (openSlotCode.length() == 0) openSlotCode = slot;
+
+      Serial.printf("[KEYPAD] OTP hop le! Mo ngan %s\n", openSlotCode.c_str());
+      lcdShowSuccess(openSlotCode);
+      openSlot(openSlotCode, SERVO_AUTO_LOCK_DELAY_MS);
       showingFeedback = true;
+      lastVerifySuccess = true;
       messageResetTime = millis() + 4500;
       return;
     }
   }
 
   // Trường hợp sai mã hoặc lỗi
-  Serial.println("[KEYPAD] OTP khong hop le hoac da het han!");
-  lcdShowError("Thu lai sau 2s");
+  Serial.println("[KEYPAD] OTP khong hop le hoac sai ngan!");
+  String errMsg = "Sai OTP / Ngan";
+  if (resDoc.containsKey("message")) {
+    String msg = resDoc["message"].as<String>();
+    if (msg.length() > 0 && msg.length() <= 16) {
+      errMsg = msg;
+    }
+  }
+  lcdShowError(errMsg);
   showingFeedback = true;
+  lastVerifySuccess = false;
   messageResetTime = millis() + 2500;
 }
 
 void initKeypad() {
+  keypadState = STATE_CHOOSE_SLOT;
+  selectedSlot = "";
   otpBuffer = "";
   showingFeedback = false;
+  lastVerifySuccess = false;
   for (int r = 0; r < 4; r++) pinMode(rowPins[r], INPUT_PULLUP);
   for (int c = 0; c < 4; c++) pinMode(colPins[c], INPUT_PULLUP);
-  Serial.println("[KEYPAD] Pure 4x4 matrix scanner initialized (No external library required).");
+  Serial.println("[KEYPAD] Pure 4x4 matrix scanner initialized with 2-step slot selection.");
 }
 
 void updateKeypad() {
   unsigned long now = millis();
 
-  // Đặt lại màn hình chờ sau khi hiển thị kết quả thành công/thất bại
+  // Đặt lại màn hình sau khi hiển thị kết quả thành công/thất bại
   if (showingFeedback && now >= messageResetTime) {
     showingFeedback = false;
     otpBuffer = "";
-    lcdShowIdle(otpBuffer);
+    if (lastVerifySuccess) {
+      keypadState = STATE_CHOOSE_SLOT;
+      selectedSlot = "";
+      // Nhường LCD cho locker.cpp hiển thị "VUI LONG DONG CUA" cho đến khi đóng cửa thật
+    } else {
+      // Nếu sai OTP, cho phép nhập lại ngay trên ngăn đã chọn
+      lcdShowOtpInput(selectedSlot, otpBuffer);
+    }
   }
 
   char key = getDebouncedKey();
-  if (key) {
-    Serial.printf("[KEYPAD] Key pressed: %c\n", key);
+  if (!key) return;
 
-    // Nếu đang hiện thông báo, bấm bất kỳ phím nào cũng thoát về màn hình nhập
-    if (showingFeedback) {
-      showingFeedback = false;
-      otpBuffer = "";
-      lcdShowIdle(otpBuffer);
+  Serial.printf("[KEYPAD] Key pressed: %c (State: %d)\n", key, keypadState);
+
+  // Nếu đang hiển thị feedback lỗi/thành công, bấm phím bất kỳ sẽ thoát ngay
+  if (showingFeedback) {
+    showingFeedback = false;
+    otpBuffer = "";
+    if (lastVerifySuccess) {
+      keypadState = STATE_CHOOSE_SLOT;
+      selectedSlot = "";
+      lcdShowSelectSlot();
+    } else {
+      lcdShowOtpInput(selectedSlot, otpBuffer);
     }
+    return;
+  }
 
+  // BƯỚC 1: ĐANG Ở MÀN HÌNH CHỌN NGĂN TỦ
+  if (keypadState == STATE_CHOOSE_SLOT) {
+    if (key == '1' || key == 'A') {
+      selectedSlot = "A01";
+      otpBuffer = "";
+      keypadState = STATE_ENTER_OTP;
+      lcdShowOtpInput(selectedSlot, otpBuffer);
+      Serial.println("[KEYPAD] Da chon ngan A01 -> Chuyen sang nhap OTP");
+    } else if (key == '2' || key == 'B') {
+      selectedSlot = "A02";
+      otpBuffer = "";
+      keypadState = STATE_ENTER_OTP;
+      lcdShowOtpInput(selectedSlot, otpBuffer);
+      Serial.println("[KEYPAD] Da chon ngan A02 -> Chuyen sang nhap OTP");
+    } else {
+      // Phím khác -> nhắc lại màn hình chọn ngăn
+      lcdShowSelectSlot();
+    }
+    return;
+  }
+
+  // BƯỚC 2: ĐANG Ở MÀN HÌNH NHẬP MÃ OTP CHO NGĂN ĐÃ CHỌN
+  if (keypadState == STATE_ENTER_OTP) {
     if (key >= '0' && key <= '9') {
       if (otpBuffer.length() < 6) {
         otpBuffer += key;
-        lcdShowIdle(otpBuffer);
+        lcdShowOtpInput(selectedSlot, otpBuffer);
       }
     } else if (key == '*') {
-      // Phím '*' làm phím Xóa (Backspace)
+      // Phím '*' làm phím Backspace / Quay lại
       if (otpBuffer.length() > 0) {
         otpBuffer.remove(otpBuffer.length() - 1);
-        lcdShowIdle(otpBuffer);
+        lcdShowOtpInput(selectedSlot, otpBuffer);
+      } else {
+        // Nếu ô OTP đang trống mà bấm '*' -> Quay lại bước chọn ngăn tủ!
+        keypadState = STATE_CHOOSE_SLOT;
+        selectedSlot = "";
+        lcdShowSelectSlot();
+        Serial.println("[KEYPAD] Quay lai man hinh chon ngan tu.");
       }
+    } else if (key == 'C') {
+      // Phím 'C' làm sạch ô OTP
+      otpBuffer = "";
+      lcdShowOtpInput(selectedSlot, otpBuffer);
     } else if (key == '#') {
-      // Phím '#' làm phím Xác nhận (Enter)
+      // Phím '#' làm phím Xác nhận gửi mã
       if (otpBuffer.length() == 6) {
-        verifyOtpWithServer(otpBuffer);
+        verifyOtpWithServer(selectedSlot, otpBuffer);
       } else if (otpBuffer.length() == 0) {
-        lcdShowIdle("");
+        // Chưa nhập gì mà bấm Enter -> quay về chọn ngăn
+        keypadState = STATE_CHOOSE_SLOT;
+        selectedSlot = "";
+        lcdShowSelectSlot();
       } else {
         lcdShowError("OTP can 6 so");
         showingFeedback = true;
+        lastVerifySuccess = false;
         messageResetTime = now + 1800;
       }
-    } else if (key == 'C') {
-      // Phím 'C' làm phím Clear (Xóa sạch)
-      otpBuffer = "";
-      lcdShowIdle(otpBuffer);
     }
   }
 }

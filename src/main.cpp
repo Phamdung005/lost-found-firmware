@@ -73,7 +73,27 @@ void loop() {
     }
   }
 
-  // 5. Gửi Heartbeat và trạng thái cảm biến cửa từ lên Backend (Mỗi 10 giây)
+  // 5. Kiểm tra cảm biến cửa thay đổi trạng thái -> GỬI CẬP NHẬT NGAY LẬP TỨC (Realtime)
+  static String lastSentDoorA01 = "";
+  static String lastSentDoorA02 = "";
+  static unsigned long lastDoorCheckTime = 0;
+
+  String curDoorA01 = getDoorStatusA01();
+  String curDoorA02 = getDoorStatusA02();
+
+  if ((curDoorA01 != lastSentDoorA01 || curDoorA02 != lastSentDoorA02) && (now - lastDoorCheckTime >= 600)) {
+    lastDoorCheckTime = now;
+    lastSentDoorA01 = curDoorA01;
+    lastSentDoorA02 = curDoorA02;
+    lastHeartbeatTime = now;
+    if (isWiFiConnected()) {
+      Serial.printf("[DOOR REALTIME] Cua thay doi (A01: %s, A02: %s) -> Gui cap nhat ngay lap tuc!\n",
+                    curDoorA01.c_str(), curDoorA02.c_str());
+      sendHeartbeat();
+    }
+  }
+
+  // 6. Gửi Heartbeat định kỳ lên Backend (Mỗi 10 giây nếu cửa không thay đổi)
   if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatTime = now;
     if (isWiFiConnected()) {

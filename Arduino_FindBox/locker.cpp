@@ -1,66 +1,65 @@
 #include "locker.h"
 #include "config.h"
+#include "lcd.h"
+#include "door_sensor.h"
 #include <ESP32Servo.h>
+
+enum SlotState {
+  SLOT_IDLE,                 // Cửa đang khóa, servo ngắt điện
+  SLOT_UNLOCKING,            // Đang cấp điện để servo quay sang 90 độ (500ms)
+  SLOT_WAITING_DOOR_CLOSE,   // Đã mở xong (servo ngắt điện). Chờ cảm biến báo cửa đóng (LOW)
+  SLOT_LOCKING               // Cửa đã đóng -> Cấp điện quay servo về 0 độ (500ms) -> ngắt điện
+};
 
 static Servo servoA01;
 static Servo servoA02;
 
-static unsigned long unlockTimerA01 = 0;
-static unsigned long unlockTimerA02 = 0;
-static unsigned long detachTimerA01 = 0;
-static unsigned long detachTimerA02 = 0;
+static SlotState stateA01 = SLOT_IDLE;
+static unsigned long timerA01 = 0;
+static bool doorEverOpenedA01 = false;
 
-static bool isUnlockedA01 = false;
-static bool isUnlockedA02 = false;
-static bool isAttachedA01 = false;
-static bool isAttachedA02 = false;
+static SlotState stateA02 = SLOT_IDLE;
+static unsigned long timerA02 = 0;
+static bool doorEverOpenedA02 = false;
 
 void initLockers() {
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
 
   servoA01.setPeriodHertz(50);
   servoA02.setPeriodHertz(50);
 
-  // Khởi động tuần tự (tránh cả 2 cùng hút dòng cùng 1 lúc)
-  servoA01.attach(SERVO_A01_PIN, 500, 2400);
-  servoA01.write(SERVO_LOCK_ANGLE);
-  delay(150);
-  servoA01.detach(); // Ngắt điện cuộn dây khi đứng yên để không ăn dòng
+  stateA01 = SLOT_IDLE;
+  stateA02 = SLOT_IDLE;
 
-  servoA02.attach(SERVO_A02_PIN, 500, 2400);
-  servoA02.write(SERVO_LOCK_ANGLE);
-  delay(150);
-  servoA02.detach();
-
-  isAttachedA01 = false;
-  isAttachedA02 = false;
-
-  Serial.println("[LOCKER] Initialized servos with smart detach power saving.");
+  Serial.println("[LOCKER] Initialized servos for A01 (GPIO 18) and A02 (GPIO 19).");
 }
 
 bool openSlot(const String& slotCode, int durationMs) {
-  if (durationMs <= 0) durationMs = SERVO_AUTO_LOCK_DELAY_MS;
+  unsigned long now = millis();
 
   if (slotCode == "A01") {
-    if (!isAttachedA01) {
-      servoA01.attach(SERVO_A01_PIN, 500, 2400);
-      isAttachedA01 = true;
-    }
+    // 1. Cấp xung điều khiển servo quay sang 90 độ để mở chốt
+    servoA01.attach(SERVO_A01_PIN, 544, 2400);
     servoA01.write(SERVO_UNLOCK_ANGLE);
-    isUnlockedA01 = true;
-    unlockTimerA01 = millis() + durationMs;
-    Serial.println("[LOCKER] Slot A01 UNLOCKED (Servo GPIO 18 -> 90 deg)");
+
+    stateA01 = SLOT_UNLOCKING;
+    timerA01 = now + 500; // Cấp điện 500ms để servo quay trọn vẹn đến 90 độ
+    doorEverOpenedA01 = false;
+
+    Serial.printf("[LOCKER] Slot A01 -> Xoay mo (%d deg)...\n", SERVO_UNLOCK_ANGLE);
     return true;
   } else if (slotCode == "A02") {
-    if (!isAttachedA02) {
-      servoA02.attach(SERVO_A02_PIN, 500, 2400);
-      isAttachedA02 = true;
-    }
+    servoA02.attach(SERVO_A02_PIN, 544, 2400);
     servoA02.write(SERVO_UNLOCK_ANGLE);
-    isUnlockedA02 = true;
-    unlockTimerA02 = millis() + durationMs;
-    Serial.println("[LOCKER] Slot A02 UNLOCKED (Servo GPIO 19 -> 90 deg)");
+
+    stateA02 = SLOT_UNLOCKING;
+    timerA02 = now + 500;
+    doorEverOpenedA02 = false;
+
+    Serial.printf("[LOCKER] Slot A02 -> Xoay mo (%d deg)...\n", SERVO_UNLOCK_ANGLE);
     return true;
   }
 
@@ -68,37 +67,87 @@ bool openSlot(const String& slotCode, int durationMs) {
   return false;
 }
 
-// Cập nhật non-blocking: Đóng khóa và ngắt điện servo
 void updateLockerServos() {
   unsigned long now = millis();
 
-  // Khóa lại ngăn A01 sau khi hết thời gian mở
-  if (isUnlockedA01 && now >= unlockTimerA01) {
-    servoA01.write(SERVO_LOCK_ANGLE);
-    isUnlockedA01 = false;
-    detachTimerA01 = now + 600; // Cho 600ms để servo kịp quay về 0 độ rồi mới ngắt điện
-    Serial.println("[LOCKER] Slot A01 AUTO-LOCKED (Servo GPIO 18 -> 0 deg)");
+  // ==========================================
+  // XỬ LÝ NGĂN A01
+  // ==========================================
+  if (stateA01 == SLOT_UNLOCKING) {
+    if (now >= timerA01) {
+      servoA01.detach(); // Ngắt điện hoàn toàn (0mA, không nóng motor, chống sụt áp)
+      stateA01 = SLOT_WAITING_DOOR_CLOSE;
+      timerA01 = now + 1500; // Đặt mốc tối thiểu 1.5s trước khi cho phép khóa lại
+      
+      lcdShowWaitingDoorClose("A01");
+      Serial.println("[LOCKER] Slot A01 da mo (90 deg). Detached servo. Dang cho dong cua...");
+    }
+  } else if (stateA01 == SLOT_WAITING_DOOR_CLOSE) {
+    String doorStatus = getDoorStatusA01();
+
+    // Ghi nhận cửa đã được kéo mở ra
+    if (doorStatus == "open") {
+      doorEverOpenedA01 = true;
+    }
+
+    // Khi người dùng khép cửa lại (cảm biến báo closed) và đã qua ít nhất 1.5s
+    // Hoặc nếu đang test chưa mở mà khép nam châm vào sau 1.5s
+    if (doorStatus == "closed" && (doorEverOpenedA01 || now >= timerA01)) {
+      Serial.println("[LOCKER] Cua A01 da DONG! Bat dau quay khoa ve 0 deg...");
+      
+      servoA01.attach(SERVO_A01_PIN, 544, 2400);
+      servoA01.write(SERVO_LOCK_ANGLE);
+
+      stateA01 = SLOT_LOCKING;
+      timerA01 = now + 500; // Cấp điện 500ms để servo quay về vị trí khóa
+      lcdShowDoorLocked("A01");
+    }
+  } else if (stateA01 == SLOT_LOCKING) {
+    if (now >= timerA01) {
+      servoA01.detach(); // Đã khóa xong -> ngắt điện hoàn toàn!
+      stateA01 = SLOT_IDLE;
+      Serial.println("[LOCKER] Slot A01 DA KHOA XONG. Ngat dien hoan toan.");
+      delay(1200);
+      lcdShowSelectSlot(); // Làm mới lại LCD về màn hình chọn ngăn
+    }
   }
 
-  // Tự ngắt điện servo A01 để bảo vệ nguồn, chống sụt áp
-  if (!isUnlockedA01 && isAttachedA01 && now >= detachTimerA01) {
-    servoA01.detach();
-    isAttachedA01 = false;
-    Serial.println("[LOCKER] Slot A01 Servo detached (Power saved)");
-  }
+  // ==========================================
+  // XỬ LÝ NGĂN A02
+  // ==========================================
+  if (stateA02 == SLOT_UNLOCKING) {
+    if (now >= timerA02) {
+      servoA02.detach();
+      stateA02 = SLOT_WAITING_DOOR_CLOSE;
+      timerA02 = now + 1500;
+      
+      lcdShowWaitingDoorClose("A02");
+      Serial.println("[LOCKER] Slot A02 da mo (90 deg). Detached servo. Dang cho dong cua...");
+    }
+  } else if (stateA02 == SLOT_WAITING_DOOR_CLOSE) {
+    String doorStatus = getDoorStatusA02();
 
-  // Khóa lại ngăn A02 sau khi hết thời gian mở
-  if (isUnlockedA02 && now >= unlockTimerA02) {
-    servoA02.write(SERVO_LOCK_ANGLE);
-    isUnlockedA02 = false;
-    detachTimerA02 = now + 600;
-    Serial.println("[LOCKER] Slot A02 AUTO-LOCKED (Servo GPIO 19 -> 0 deg)");
-  }
+    if (doorStatus == "open") {
+      doorEverOpenedA02 = true;
+    }
 
-  // Tự ngắt điện servo A02
-  if (!isUnlockedA02 && isAttachedA02 && now >= detachTimerA02) {
-    servoA02.detach();
-    isAttachedA02 = false;
-    Serial.println("[LOCKER] Slot A02 Servo detached (Power saved)");
+    if (doorStatus == "closed" && (doorEverOpenedA02 || now >= timerA02)) {
+      Serial.println("[LOCKER] Cua A02 da DONG! Bat dau quay khoa ve 0 deg...");
+      
+      servoA02.attach(SERVO_A02_PIN, 544, 2400);
+      servoA02.write(SERVO_LOCK_ANGLE);
+
+      stateA02 = SLOT_LOCKING;
+      timerA02 = now + 500;
+      lcdShowDoorLocked("A02");
+    }
+  } else if (stateA02 == SLOT_LOCKING) {
+    if (now >= timerA02) {
+      servoA02.detach();
+      stateA02 = SLOT_IDLE;
+      Serial.println("[LOCKER] Slot A02 DA KHOA XONG. Ngat dien hoan toan.");
+      delay(1200);
+      lcdShowSelectSlot();
+    }
   }
 }

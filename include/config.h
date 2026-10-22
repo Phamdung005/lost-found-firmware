@@ -37,10 +37,10 @@
 #define KEYPAD_COL_3 33
 #define KEYPAD_COL_4 32
 
-// Góc mở và khóa Servo
+// Góc mở và khóa Servo (Mở 90 độ, Khóa 0 độ)
 #define SERVO_LOCK_ANGLE 0
 #define SERVO_UNLOCK_ANGLE 90
-#define SERVO_AUTO_LOCK_DELAY_MS 5000 // Tự động khóa lại sau 5 giây
+#define SERVO_AUTO_LOCK_DELAY_MS 5000 // (Dùng khi không có cảm biến đóng)
 
 // Chu kỳ Polling và Heartbeat
 #define HEARTBEAT_INTERVAL_MS 10000   // Gửi heartbeat mỗi 10 giây

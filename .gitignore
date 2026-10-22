@@ -1,0 +1,31 @@
+# PlatformIO build artifacts & libraries
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+
+# VS Code & IDE configs
+.vscode/
+.idea/
+*.code-workspace
+
+# Clang compilation database
+compile_commands.json
+
+# Firmware binaries and objects
+*.bin
+*.elf
+*.hex
+*.o
+*.a
+*.d
+
+# Arduino build cache
+build/
+*.tmp
+*.bak
+
+# Operating System files
+.DS_Store
+Thumbs.db
+ehthumbs.db

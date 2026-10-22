@@ -6,6 +6,21 @@
 static LiquidCrystal_I2C* pLcd = nullptr;
 static uint8_t actualAddr = 0;
 
+// Hàm in 1 dòng chuẩn 16 ký tự, tự động chèn khoảng trắng để KHÔNG CẦN gọi clear()
+// (Tránh hoàn toàn lỗi bị lệch pha sinh ra ký tự rác o_0 hoặc ba gạch)
+static void printLine16(int line, const String& text) {
+  if (!pLcd) return;
+  pLcd->setCursor(0, line);
+  String padded = text;
+  while (padded.length() < 16) {
+    padded += ' ';
+  }
+  if (padded.length() > 16) {
+    padded = padded.substring(0, 16);
+  }
+  pLcd->print(padded);
+}
+
 static uint8_t scanI2CAddress() {
   Serial.println("[I2C] Bat dau quet dia chi I2C...");
   for (uint8_t addr = 1; addr < 127; addr++) {
@@ -17,113 +32,102 @@ static uint8_t scanI2CAddress() {
     }
   }
   Serial.println("[I2C] CANH BAO: Khong tim thay thiet bi I2C nao!");
-  Serial.println("[I2C] Vui long kiem tra:");
-  Serial.println("      1. Dây VCC phai cam vao 5V (khong cam 3.3V)");
-  Serial.println("      2. Dây SDA cam vao GPIO 21");
-  Serial.println("      3. Dây SCL cam vao GPIO 22");
   return 0;
 }
 
 void initLcd() {
   Wire.begin(LCD_SDA_PIN, LCD_SCL_PIN);
-  delay(100);
+  Wire.setClock(50000); // Hạ xung I2C xuống 50kHz để chống nhiễu đường truyền và cáp dài
+  delay(200);
 
   actualAddr = scanI2CAddress();
   if (actualAddr == 0) {
-    actualAddr = LCD_I2C_ADDR; // Dùng cấu hình dự phòng
+    actualAddr = LCD_I2C_ADDR;
   }
 
   if (pLcd) delete pLcd;
   pLcd = new LiquidCrystal_I2C(actualAddr, LCD_COLS, LCD_ROWS);
 
+  delay(50);
   pLcd->init();
+  delay(50);
   pLcd->backlight();
+  delay(50);
   pLcd->clear();
-  lcdShowBooting();
+  delay(50);
+
+  printLine16(0, " FINDBOX LOCKER ");
+  printLine16(1, "  Khoi dong...  ");
 }
 
 void lcdShowBooting() {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("  FINDBOX LOCKER");
-  pLcd->setCursor(0, 1);
-  pLcd->print("Khoi dong...");
+  printLine16(0, " FINDBOX LOCKER ");
+  printLine16(1, "  Khoi dong...  ");
 }
 
 void lcdShowWiFiConnecting(const char* ssid) {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("Ket noi Wi-Fi:");
-  pLcd->setCursor(0, 1);
-  String s = String(ssid);
-  if (s.length() > 16) s = s.substring(0, 16);
-  pLcd->print(s);
+  printLine16(0, "Ket noi Wi-Fi:  ");
+  printLine16(1, String(ssid));
 }
 
 void lcdShowWiFiConnected(const String& ip) {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("Wi-Fi Da Ket Noi");
-  pLcd->setCursor(0, 1);
-  pLcd->print(ip.substring(0, 16));
+  printLine16(0, "Wi-Fi Connected ");
+  printLine16(1, ip);
+}
+
+void lcdShowSelectSlot() {
+  printLine16(0, " CHON NGAN TU:  ");
+  printLine16(1, "1:A01      2:A02");
+}
+
+void lcdShowOtpInput(const String& slotCode, const String& currentOtp) {
+  printLine16(0, "NGAN " + slotCode + ": NHAP ");
+  if (currentOtp.length() == 0) {
+    printLine16(1, "OTP: ______  *<-");
+  } else {
+    String line = "OTP: " + currentOtp;
+    while (line.length() < 12) {
+      line += '_';
+    }
+    line += " *<-";
+    printLine16(1, line);
+  }
 }
 
 void lcdShowIdle(const String& currentOtp) {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("FINDBOX - SAN SANG");
-  pLcd->setCursor(0, 1);
   if (currentOtp.length() == 0) {
-    pLcd->print("Nhap OTP: ______");
+    lcdShowSelectSlot();
   } else {
-    pLcd->print("OTP: ");
-    pLcd->print(currentOtp);
-    for (int i = currentOtp.length(); i < 6; i++) {
-      pLcd->print("_");
-    }
+    lcdShowOtpInput("A01", currentOtp);
   }
 }
 
 void lcdShowVerifying() {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("DANG KIEM TRA...");
-  pLcd->setCursor(0, 1);
-  pLcd->print("Xin vui long cho");
+  printLine16(0, "DANG KIEM TRA...");
+  printLine16(1, "Xin vui long cho");
 }
 
 void lcdShowSuccess(const String& slotCode) {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("XAC THUC DUNG!");
-  pLcd->setCursor(0, 1);
-  pLcd->print("Mo Ngan ");
-  pLcd->print(slotCode);
-  pLcd->print(" (5s)");
+  printLine16(0, " XAC THUC DUNG! ");
+  printLine16(1, "Mo Ngan: " + slotCode);
 }
 
 void lcdShowError(const String& errorMsg) {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("SAI MA / HET HAN");
-  pLcd->setCursor(0, 1);
-  String msg = errorMsg.length() > 16 ? errorMsg.substring(0, 16) : errorMsg;
-  pLcd->print(msg);
+  printLine16(0, "SAI MA / HET HAN");
+  printLine16(1, errorMsg);
 }
 
 void lcdShowDoorOpen(const String& slotCode) {
-  if (!pLcd) return;
-  pLcd->clear();
-  pLcd->setCursor(0, 0);
-  pLcd->print("CUA DANG MO:");
-  pLcd->setCursor(0, 1);
-  pLcd->print("Ngan ");
-  pLcd->print(slotCode);
+  printLine16(0, "CUA DANG MO:    ");
+  printLine16(1, "Ngan " + slotCode);
+}
+
+void lcdShowWaitingDoorClose(const String& slotCode) {
+  printLine16(0, "MO NGAN " + slotCode + " XONG");
+  printLine16(1, "VUI LONG DONG CUA");
+}
+
+void lcdShowDoorLocked(const String& slotCode) {
+  printLine16(0, "DA DONG CUA: " + slotCode);
+  printLine16(1, "DA KHOA CHOT OK ");
 }
