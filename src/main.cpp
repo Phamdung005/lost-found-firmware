@@ -6,12 +6,16 @@
 #include "command_handler.h"
 #include "keypad.h"
 #include "lcd.h"
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 static unsigned long lastHeartbeatTime = 0;
 static unsigned long lastPollTime = 0;
 static unsigned long lastWiFiCheckTime = 0;
 
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Vô hiệu hóa ngắt sụt áp do Servo khởi động
+
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n==========================================");

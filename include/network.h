@@ -6,5 +6,6 @@
 void connectWiFi();
 bool isWiFiConnected();
 int getWiFiRSSI();
+String getWiFiIP();
 
 #endif

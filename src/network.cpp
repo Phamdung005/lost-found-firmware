@@ -32,3 +32,10 @@ int getWiFiRSSI() {
   }
   return 0;
 }
+
+String getWiFiIP() {
+  if (isWiFiConnected()) {
+    return WiFi.localIP().toString();
+  }
+  return "0.0.0.0";
+}

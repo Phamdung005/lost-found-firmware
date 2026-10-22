@@ -3,29 +3,77 @@
 #include "lcd.h"
 #include "locker.h"
 #include "network.h"
-#include <Keypad.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-// Định nghĩa ma trận 4x4
-const byte ROWS = 4;
-const byte COLS = 4;
-
-char keys[ROWS][COLS] = {
+// Định nghĩa ma trận phím 4x4 (Tự quét phần cứng, KHÔNG CẦN thư viện bên ngoài)
+static const char keymap[4][4] = {
   {'1', '2', '3', 'A'},
   {'4', '5', '6', 'B'},
   {'7', '8', '9', 'C'},
   {'*', '0', '#', 'D'}
 };
 
-byte rowPins[ROWS] = {KEYPAD_ROW_1, KEYPAD_ROW_2, KEYPAD_ROW_3, KEYPAD_ROW_4};
-byte colPins[COLS] = {KEYPAD_COL_1, KEYPAD_COL_2, KEYPAD_COL_3, KEYPAD_COL_4};
-
-static Keypad customKeypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+static const uint8_t rowPins[4] = {KEYPAD_ROW_1, KEYPAD_ROW_2, KEYPAD_ROW_3, KEYPAD_ROW_4};
+static const uint8_t colPins[4] = {KEYPAD_COL_1, KEYPAD_COL_2, KEYPAD_COL_3, KEYPAD_COL_4};
 
 static String otpBuffer = "";
 static unsigned long messageResetTime = 0;
 static bool showingFeedback = false;
+
+// Hàm quét ma trận phím trực tiếp
+static char scanKeypadMatrix() {
+  for (int r = 0; r < 4; r++) {
+    pinMode(rowPins[r], INPUT_PULLUP);
+  }
+  for (int c = 0; c < 4; c++) {
+    pinMode(colPins[c], INPUT_PULLUP);
+  }
+
+  char detected = 0;
+
+  for (int c = 0; c < 4; c++) {
+    pinMode(colPins[c], OUTPUT);
+    digitalWrite(colPins[c], LOW);
+    delayMicroseconds(20);
+
+    for (int r = 0; r < 4; r++) {
+      if (digitalRead(rowPins[r]) == LOW) {
+        detected = keymap[r][c];
+        break;
+      }
+    }
+
+    digitalWrite(colPins[c], HIGH);
+    pinMode(colPins[c], INPUT_PULLUP);
+
+    if (detected != 0) break;
+  }
+
+  return detected;
+}
+
+static unsigned long lastDebounceTime = 0;
+static bool keyReleased = true;
+
+// Hàm bắt phím có chống rung (Debounce)
+static char getDebouncedKey() {
+  char current = scanKeypadMatrix();
+  unsigned long now = millis();
+
+  if (current != 0) {
+    if (keyReleased && (now - lastDebounceTime > 150)) {
+      lastDebounceTime = now;
+      keyReleased = false;
+      return current;
+    }
+  } else {
+    if (now - lastDebounceTime > 100) {
+      keyReleased = true;
+    }
+  }
+  return 0;
+}
 
 static void verifyOtpWithServer(const String& otp) {
   if (!isWiFiConnected()) {
@@ -82,7 +130,9 @@ static void verifyOtpWithServer(const String& otp) {
 void initKeypad() {
   otpBuffer = "";
   showingFeedback = false;
-  Serial.println("[KEYPAD] Keypad 4x4 matrix initialized successfully.");
+  for (int r = 0; r < 4; r++) pinMode(rowPins[r], INPUT_PULLUP);
+  for (int c = 0; c < 4; c++) pinMode(colPins[c], INPUT_PULLUP);
+  Serial.println("[KEYPAD] Pure 4x4 matrix scanner initialized (No external library required).");
 }
 
 void updateKeypad() {
@@ -95,7 +145,7 @@ void updateKeypad() {
     lcdShowIdle(otpBuffer);
   }
 
-  char key = customKeypad.getKey();
+  char key = getDebouncedKey();
   if (key) {
     Serial.printf("[KEYPAD] Key pressed: %c\n", key);
 

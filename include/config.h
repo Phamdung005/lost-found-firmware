@@ -2,11 +2,11 @@
 #define CONFIG_H
 
 // Cấu hình Wi-Fi
-#define WIFI_SSID "Your_WiFi_Name"
-#define WIFI_PASSWORD "Your_WiFi_Password"
+#define WIFI_SSID "NguyenVanChien"
+#define WIFI_PASSWORD "99999999"
 
 // Cấu hình API Backend FindBox (Thay bằng URL Backend Render của bạn khi nạp code)
-#define BACKEND_BASE_URL "YOUR_BACKEND_URL/api/device"
+#define BACKEND_BASE_URL "https://lost-found-app-ehkf.onrender.com/api/device"
 #define DEVICE_TOKEN "esp32_smart_locker_secret_token_2026"
 
 // Cấu hình GPIO điều khiển Servo SG90 (Mở chốt khóa)
