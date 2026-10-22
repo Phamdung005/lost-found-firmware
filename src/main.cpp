@@ -5,6 +5,7 @@
 #include "door_sensor.h"
 #include "command_handler.h"
 #include "keypad.h"
+#include "lcd.h"
 
 static unsigned long lastHeartbeatTime = 0;
 static unsigned long lastPollTime = 0;
@@ -15,23 +16,31 @@ void setup() {
   delay(1000);
   Serial.println("\n==========================================");
   Serial.println("  FINDBOX — SMART LOST & FOUND LOCKER");
-  Serial.println("  ESP32 Firmware Controller v1.2.0");
+  Serial.println("  ESP32 Firmware Controller v1.3.0");
   Serial.println("==========================================");
 
-  // 1. Khởi tạo phần cứng
+  // 1. Khởi tạo Màn hình LCD 1602 I2C
+  initLcd();
+
+  // 2. Khởi tạo phần cứng (Servo, Cảm biến, Keypad)
   initLockers();      // Servo SG90 GPIO 18 (A01), GPIO 19 (A02)
-  initDoorSensors();  // Cảm biến cửa từ GPIO 22 (A01), GPIO 23 (A02)
+  initDoorSensors();  // Cảm biến cửa từ GPIO 4 (A01), GPIO 5 (A02)
   initKeypad();       // Bàn phím ma trận 4x4
 
-  // 2. Kết nối Wi-Fi
+  // 3. Kết nối Wi-Fi
+  lcdShowWiFiConnecting(WIFI_SSID);
   connectWiFi();
 
-  // 3. Gửi heartbeat đầu tiên báo online
+  // 4. Cập nhật trạng thái sau khi có Wi-Fi
   if (isWiFiConnected()) {
+    lcdShowWiFiConnected(getWiFiIP());
+    delay(1500);
     sendHeartbeat();
   }
 
-  Serial.println("[SYSTEM] Ready and listening for locker commands...");
+  // 5. Hiển thị màn hình chờ nhập mã OTP
+  lcdShowIdle("");
+  Serial.println("[SYSTEM] Ready and listening for locker commands & keypad OTP...");
 }
 
 void loop() {
