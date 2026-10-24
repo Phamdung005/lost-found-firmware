@@ -131,3 +131,8 @@ void lcdShowDoorLocked(const String& slotCode) {
   printLine16(0, "DA DONG CUA: " + slotCode);
   printLine16(1, "DA KHOA CHOT OK ");
 }
+
+void lcdShowLockout(int secondsLeft) {
+  printLine16(0, "KHOA BAN PHIM!  ");
+  printLine16(1, "Thu lai sau: " + String(secondsLeft) + "s");
+}

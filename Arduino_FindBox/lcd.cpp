@@ -6,6 +6,8 @@
 static LiquidCrystal_I2C* pLcd = nullptr;
 static uint8_t actualAddr = 0;
 
+// Hàm in 1 dòng chuẩn 16 ký tự, tự động chèn khoảng trắng để KHÔNG CẦN gọi clear()
+// (Tránh hoàn toàn lỗi bị lệch pha sinh ra ký tự rác o_0 hoặc ba gạch)
 static void printLine16(int line, const String& text) {
   if (!pLcd) return;
   pLcd->setCursor(0, line);
@@ -128,4 +130,9 @@ void lcdShowWaitingDoorClose(const String& slotCode) {
 void lcdShowDoorLocked(const String& slotCode) {
   printLine16(0, "DA DONG CUA: " + slotCode);
   printLine16(1, "DA KHOA CHOT OK ");
+}
+
+void lcdShowLockout(int secondsLeft) {
+  printLine16(0, "KHOA BAN PHIM!  ");
+  printLine16(1, "Thu lai sau: " + String(secondsLeft) + "s");
 }

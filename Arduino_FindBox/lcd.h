@@ -16,5 +16,6 @@ void lcdShowError(const String& errorMsg);
 void lcdShowDoorOpen(const String& slotCode);
 void lcdShowWaitingDoorClose(const String& slotCode);
 void lcdShowDoorLocked(const String& slotCode);
+void lcdShowLockout(int secondsLeft);
 
 #endif

@@ -28,6 +28,10 @@ static String otpBuffer = "";
 static unsigned long messageResetTime = 0;
 static bool showingFeedback = false;
 static bool lastVerifySuccess = false;
+static int failedAttempts = 0;
+static bool isLockedOut = false;
+static unsigned long lockoutUntil = 0;
+static unsigned long lastCountdownUpdate = 0;
 
 // Hàm quét ma trận phím trực tiếp
 static char scanKeypadMatrix() {
@@ -104,6 +108,7 @@ static void verifyOtpWithServer(const String& slot, const String& otp) {
   StaticJsonDocument<256> reqDoc;
   reqDoc["otp"] = otp;
   reqDoc["slot_code"] = slot;
+  reqDoc["failed_attempts"] = failedAttempts + 1;
 
   String reqBody;
   serializeJson(reqDoc, reqBody);
@@ -121,6 +126,7 @@ static void verifyOtpWithServer(const String& slot, const String& otp) {
     if (resDoc["success"]) {
       String openSlotCode = resDoc["data"]["slot_code"].as<String>();
       if (openSlotCode.length() == 0) openSlotCode = slot;
+      failedAttempts = 0;
 
       Serial.printf("[KEYPAD] OTP hop le! Mo ngan %s\n", openSlotCode.c_str());
       lcdShowSuccess(openSlotCode);
@@ -133,14 +139,18 @@ static void verifyOtpWithServer(const String& slot, const String& otp) {
   }
 
   // Trường hợp sai mã hoặc lỗi
-  Serial.println("[KEYPAD] OTP khong hop le hoac sai ngan!");
-  String errMsg = "Sai OTP / Ngan";
-  if (resDoc.containsKey("message")) {
-    String msg = resDoc["message"].as<String>();
-    if (msg.length() > 0 && msg.length() <= 16) {
-      errMsg = msg;
-    }
+  failedAttempts++;
+  Serial.printf("[KEYPAD] OTP khong dung! nhap sai lan %d/3\n", failedAttempts);
+  if(failedAttempts >= 3) {
+    isLockedOut = true;
+    lockoutUntil = millis() + 60 * 1000;
+    lcdShowLockout(60);
+    showingFeedback = false;
+    otpBuffer = "";
+    return;
   }
+
+  String errMsg = "Sai OTP (" + String(failedAttempts) + "/3)";
   lcdShowError(errMsg);
   showingFeedback = true;
   lastVerifySuccess = false;
@@ -160,7 +170,25 @@ void initKeypad() {
 
 void updateKeypad() {
   unsigned long now = millis();
-
+  if (isLockedOut) {
+    if(now < lockoutUntil) {
+      if(now - lastCountdownUpdate >= 1000) {
+        lastCountdownUpdate = now;
+        int secondsLeft = (lockoutUntil - now) / 1000;
+        lcdShowLockout(secondsLeft);
+      }
+      return;
+    } else {
+      isLockedOut = false;
+      failedAttempts = 0;
+      keypadState = STATE_CHOOSE_SLOT;
+      selectedSlot = "";
+      otpBuffer = "";
+      lcdShowSelectSlot();
+      Serial.printf("[KEYPAD] Da het thoi gian khoa. Mo lai ban phim!");
+    } 
+  }
+  
   // Đặt lại màn hình sau khi hiển thị kết quả thành công/thất bại
   if (showingFeedback && now >= messageResetTime) {
     showingFeedback = false;
