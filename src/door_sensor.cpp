@@ -1,19 +1,23 @@
 #include "door_sensor.h"
-#include "config.h"
+#include "locker.h"
 
 void initDoorSensors() {
-  pinMode(SENSOR_A01_PIN, INPUT_PULLUP);
-  pinMode(SENSOR_A02_PIN, INPUT_PULLUP);
+  for (int i = 0; i < getConfiguredSlotCount(); i++) {
+    const SlotConfig* config = getSlotConfig(i);
+    if (config != nullptr) pinMode(config->sensorPin, INPUT_PULLUP);
+  }
 }
 
-// Cảm biến từ: khi cửa đóng nam châm chạm vào switch đóng mạch -> LOW
-// Khi cửa mở tách nam châm -> HIGH
+String getDoorStatus(const String& slotCode) {
+  const SlotConfig* config = findSlotConfig(slotCode);
+  if (config == nullptr) return "unknown";
+  return digitalRead(config->sensorPin) == LOW ? "closed" : "open";
+}
+
 String getDoorStatusA01() {
-  int state = digitalRead(SENSOR_A01_PIN);
-  return (state == LOW) ? "closed" : "open";
+  return getDoorStatus("A01");
 }
 
 String getDoorStatusA02() {
-  int state = digitalRead(SENSOR_A02_PIN);
-  return (state == LOW) ? "closed" : "open";
+  return getDoorStatus("A02");
 }

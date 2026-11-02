@@ -5,5 +5,6 @@
 
 void sendHeartbeat();
 void pollNextCommand();
+bool loadDeviceConfig();
 
 #endif

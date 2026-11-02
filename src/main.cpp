@@ -27,8 +27,10 @@ void setup() {
   initLcd();
 
   // 2. Khởi tạo phần cứng (Servo, Cảm biến, Keypad)
-  initLockers();      // Servo SG90 GPIO 18 (A01), GPIO 19 (A02)
-  initDoorSensors();  // Cảm biến cửa từ GPIO 4 (A01), GPIO 5 (A02)
+  initLockers();      // Cấu hình servo động từ Backend
+  configureSlot("A01", SERVO_A01_PIN, SENSOR_A01_PIN);
+  configureSlot("A02", SERVO_A02_PIN, SENSOR_A02_PIN);
+  initDoorSensors();
   initKeypad();       // Bàn phím ma trận 4x4
 
   // 3. Kết nối Wi-Fi
@@ -39,6 +41,9 @@ void setup() {
   if (isWiFiConnected()) {
     lcdShowWiFiConnected(getWiFiIP());
     delay(1500);
+    if (!loadDeviceConfig()) {
+      Serial.println("[CONFIG] Keeping built-in A01/A02 configuration.");
+    }
     sendHeartbeat();
   }
 
@@ -74,21 +79,22 @@ void loop() {
   }
 
   // 5. Kiểm tra cảm biến cửa thay đổi trạng thái -> GỬI CẬP NHẬT NGAY LẬP TỨC (Realtime)
-  static String lastSentDoorA01 = "";
-  static String lastSentDoorA02 = "";
+  static String lastSentDoorState = "";
   static unsigned long lastDoorCheckTime = 0;
 
-  String curDoorA01 = getDoorStatusA01();
-  String curDoorA02 = getDoorStatusA02();
+  String currentDoorState = "";
+  for (int i = 0; i < getConfiguredSlotCount(); i++) {
+    const SlotConfig* config = getSlotConfig(i);
+    if (config == nullptr) continue;
+    currentDoorState += config->slotCode + ":" + getDoorStatus(config->slotCode) + ";";
+  }
 
-  if ((curDoorA01 != lastSentDoorA01 || curDoorA02 != lastSentDoorA02) && (now - lastDoorCheckTime >= 600)) {
+  if (currentDoorState != lastSentDoorState && (now - lastDoorCheckTime >= 600)) {
     lastDoorCheckTime = now;
-    lastSentDoorA01 = curDoorA01;
-    lastSentDoorA02 = curDoorA02;
+    lastSentDoorState = currentDoorState;
     lastHeartbeatTime = now;
     if (isWiFiConnected()) {
-      Serial.printf("[DOOR REALTIME] Cua thay doi (A01: %s, A02: %s) -> Gui cap nhat ngay lap tuc!\n",
-                    curDoorA01.c_str(), curDoorA02.c_str());
+      Serial.printf("[DOOR REALTIME] Door state changed (%s) -> heartbeat.\n", currentDoorState.c_str());
       sendHeartbeat();
     }
   }

@@ -33,6 +33,52 @@ static void sendAck(int commandId, bool success, const String& resultMsg, const 
   http.end();
 }
 
+bool loadDeviceConfig() {
+  if (!isWiFiConnected()) return false;
+
+  HTTPClient http;
+  String url = String(BACKEND_BASE_URL) + "/config";
+  http.begin(url);
+  http.addHeader("X-Device-Token", DEVICE_TOKEN);
+
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[CONFIG] Failed to load device config, HTTP code: %d\n", httpCode);
+    http.end();
+    return false;
+  }
+
+  StaticJsonDocument<1536> doc;
+  DeserializationError error = deserializeJson(doc, http.getString());
+  http.end();
+  if (error || doc["success"] != true || !doc["slots"].is<JsonArray>()) {
+    Serial.println("[CONFIG] Invalid device config response.");
+    return false;
+  }
+
+  clearSlotConfigs();
+  JsonArray slots = doc["slots"].as<JsonArray>();
+  for (JsonObject slot : slots) {
+    String slotCode = slot["slot_code"].as<String>();
+    int servoPin = slot["servo_pin"] | -1;
+    int sensorPin = slot["sensor_pin"] | -1;
+    if (!configureSlot(slotCode, servoPin, sensorPin)) {
+      Serial.println("[CONFIG] Rejected slot config: " + slotCode);
+    }
+  }
+
+  if (getConfiguredSlotCount() == 0) {
+    Serial.println("[CONFIG] No usable hardware slots returned.");
+    configureSlot("A01", SERVO_A01_PIN, SENSOR_A01_PIN);
+    configureSlot("A02", SERVO_A02_PIN, SENSOR_A02_PIN);
+    initDoorSensors();
+    return false;
+  }
+  initDoorSensors();
+  Serial.printf("[CONFIG] Loaded %d hardware slot(s).\n", getConfiguredSlotCount());
+  return true;
+}
+
 void sendHeartbeat() {
   if (!isWiFiConnected()) return;
 
@@ -42,29 +88,27 @@ void sendHeartbeat() {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<1536> doc;
   doc["wifi_rssi"] = getWiFiRSSI();
   doc["firmware_version"] = "v1.2.0";
 
   JsonArray slots = doc.createNestedArray("slots");
 
-  JsonObject slot1 = slots.createNestedObject();
-  slot1["slot_code"] = "A01";
-  slot1["door_status"] = getDoorStatusA01();
-
-  JsonObject slot2 = slots.createNestedObject();
-  slot2["slot_code"] = "A02";
-  slot2["door_status"] = getDoorStatusA02();
+  for (int i = 0; i < getConfiguredSlotCount(); i++) {
+    const SlotConfig* config = getSlotConfig(i);
+    if (config == nullptr) continue;
+    JsonObject slot = slots.createNestedObject();
+    slot["slot_code"] = config->slotCode;
+    slot["door_status"] = getDoorStatus(config->slotCode);
+  }
 
   String requestBody;
   serializeJson(doc, requestBody);
 
   int httpCode = http.POST(requestBody);
   if (httpCode == HTTP_CODE_OK) {
-    Serial.printf("[HEARTBEAT] Sent OK (RSSI: %d, A01: %s, A02: %s)\n",
-                  getWiFiRSSI(),
-                  getDoorStatusA01().c_str(),
-                  getDoorStatusA02().c_str());
+    Serial.printf("[HEARTBEAT] Sent OK (RSSI: %d, slots: %d)\n",
+                  getWiFiRSSI(), getConfiguredSlotCount());
   } else {
     Serial.printf("[HEARTBEAT] Failed with HTTP code: %d\n", httpCode);
   }
@@ -84,7 +128,7 @@ void pollNextCommand() {
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
 
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<768> doc;
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error && doc["success"] == true && doc["has_command"] == true) {
@@ -106,7 +150,7 @@ void pollNextCommand() {
         resultMsg = "Unsupported command type: " + cmdType;
       }
 
-      String currentDoorStatus = (slotCode == "A01") ? getDoorStatusA01() : getDoorStatusA02();
+      String currentDoorStatus = getDoorStatus(slotCode);
       sendAck(cmdId, ok, resultMsg, currentDoorStatus);
     }
   }
