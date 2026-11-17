@@ -23,6 +23,17 @@ static const int MAX_CONFIGURED_SLOTS = 12;
 static SlotController controllers[MAX_CONFIGURED_SLOTS];
 static int configuredSlotCount = 0;
 
+int getConfiguredSlotCount() {
+  return configuredSlotCount;
+}
+
+bool isAnySlotBusy() {
+  for (int i = 0; i < configuredSlotCount; i++) {
+    if (controllers[i].state != SLOT_IDLE) return true;
+  }
+  return false;
+}
+
 const SlotConfig* getSlotConfig(int index) {
   if (index < 0 || index >= configuredSlotCount) return nullptr;
   return &controllers[index].config;

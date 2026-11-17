@@ -6,5 +6,7 @@
 void sendHeartbeat();
 void pollNextCommand();
 bool loadDeviceConfig();
+bool loadPersistedDeviceConfig();
+void flushPendingAcks();
 
 #endif

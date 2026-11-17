@@ -2,35 +2,123 @@
 #include "config.h"
 #include "locker.h"
 #include "door_sensor.h"
-#include "network.h"
+#include "findbox_network.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
-static void sendAck(int commandId, bool success, const String& resultMsg, const String& doorStatus) {
-  if (!isWiFiConnected()) return;
+struct PendingAck {
+  bool used;
+  int commandId;
+  bool success;
+  String resultMsg;
+  String doorStatus;
+};
+
+static PendingAck pendingAcks[MAX_PENDING_ACKS];
+static Preferences preferences;
+static bool preferencesReady = false;
+
+static void configureHttp(HTTPClient& http) {
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_RESPONSE_TIMEOUT_MS);
+}
+
+static bool sendAckNow(const PendingAck& ack) {
+  if (!isWiFiConnected()) return false;
 
   HTTPClient http;
-  String url = String(BACKEND_BASE_URL) + "/commands/" + String(commandId) + "/ack";
+  String url = String(BACKEND_BASE_URL) + "/commands/" + String(ack.commandId) + "/ack";
   http.begin(url);
+  configureHttp(http);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
   StaticJsonDocument<256> doc;
-  doc["status"] = success ? "success" : "failed";
-  doc["result_message"] = resultMsg;
-  doc["door_status"] = doorStatus;
+  doc["status"] = ack.success ? "success" : "failed";
+  doc["result_message"] = ack.resultMsg;
+  doc["door_status"] = ack.doorStatus;
 
   String requestBody;
   serializeJson(doc, requestBody);
 
   int httpCode = http.POST(requestBody);
-  if (httpCode == HTTP_CODE_OK || httpCode == 201) {
-    Serial.printf("[HTTP] ACK sent for command #%d: %s\n", commandId, resultMsg.c_str());
+  const bool responded = httpCode > 0;
+  recordBackendRequest(responded);
+  if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+    Serial.printf("[HTTP] ACK sent for command #%d: %s\n", ack.commandId, ack.resultMsg.c_str());
   } else {
-    Serial.printf("[HTTP] ACK failed for command #%d, HTTP code: %d\n", commandId, httpCode);
+    Serial.printf("[HTTP] ACK failed for command #%d, HTTP code: %d\n", ack.commandId, httpCode);
   }
 
   http.end();
+  return httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED;
+}
+
+static void queueAck(const PendingAck& ack) {
+  for (int i = 0; i < MAX_PENDING_ACKS; i++) {
+    if (pendingAcks[i].used && pendingAcks[i].commandId == ack.commandId) return;
+  }
+  for (int i = 0; i < MAX_PENDING_ACKS; i++) {
+    if (!pendingAcks[i].used) {
+      pendingAcks[i] = ack;
+      pendingAcks[i].used = true;
+      Serial.printf("[ACK] Queued command #%d for retry.\n", ack.commandId);
+      return;
+    }
+  }
+  Serial.println("[ACK] Queue full; dropping oldest ACK.");
+  pendingAcks[0] = ack;
+  pendingAcks[0].used = true;
+}
+
+static void sendAck(int commandId, bool success, const String& resultMsg, const String& doorStatus) {
+  PendingAck ack{true, commandId, success, resultMsg, doorStatus};
+  if (!sendAckNow(ack)) queueAck(ack);
+}
+
+void flushPendingAcks() {
+  if (!isWiFiConnected()) return;
+  for (int i = 0; i < MAX_PENDING_ACKS; i++) {
+    if (!pendingAcks[i].used) continue;
+    if (sendAckNow(pendingAcks[i])) {
+      pendingAcks[i].used = false;
+    } else {
+      break;
+    }
+  }
+}
+
+static bool applyConfig(JsonArray slots) {
+  clearSlotConfigs();
+  for (JsonObject slot : slots) {
+    String slotCode = slot["slot_code"].as<String>();
+    int servoPin = slot["servo_pin"] | -1;
+    int sensorPin = slot["sensor_pin"] | -1;
+    if (!configureSlot(slotCode, servoPin, sensorPin)) {
+      Serial.println("[CONFIG] Rejected slot config: " + slotCode);
+    }
+  }
+  if (getConfiguredSlotCount() == 0) return false;
+  initDoorSensors();
+  Serial.printf("[CONFIG] Applied %d hardware slot(s).\n", getConfiguredSlotCount());
+  return true;
+}
+
+bool loadPersistedDeviceConfig() {
+  if (!preferencesReady) {
+    preferencesReady = preferences.begin("findbox", false);
+  }
+  if (!preferencesReady) return false;
+  String stored = preferences.getString("slots", "");
+  if (stored.length() == 0) return false;
+
+  StaticJsonDocument<1536> doc;
+  if (deserializeJson(doc, stored) != DeserializationError::Ok || !doc.is<JsonArray>()) {
+    Serial.println("[CONFIG] Persisted config is invalid.");
+    return false;
+  }
+  return applyConfig(doc.as<JsonArray>());
 }
 
 bool loadDeviceConfig() {
@@ -39,9 +127,11 @@ bool loadDeviceConfig() {
   HTTPClient http;
   String url = String(BACKEND_BASE_URL) + "/config";
   http.begin(url);
+  configureHttp(http);
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
   int httpCode = http.GET();
+  recordBackendRequest(httpCode > 0);
   if (httpCode != HTTP_CODE_OK) {
     Serial.printf("[CONFIG] Failed to load device config, HTTP code: %d\n", httpCode);
     http.end();
@@ -56,26 +146,20 @@ bool loadDeviceConfig() {
     return false;
   }
 
-  clearSlotConfigs();
   JsonArray slots = doc["slots"].as<JsonArray>();
-  for (JsonObject slot : slots) {
-    String slotCode = slot["slot_code"].as<String>();
-    int servoPin = slot["servo_pin"] | -1;
-    int sensorPin = slot["sensor_pin"] | -1;
-    if (!configureSlot(slotCode, servoPin, sensorPin)) {
-      Serial.println("[CONFIG] Rejected slot config: " + slotCode);
-    }
-  }
-
-  if (getConfiguredSlotCount() == 0) {
+  if (!applyConfig(slots)) {
     Serial.println("[CONFIG] No usable hardware slots returned.");
-    configureSlot("A01", SERVO_A01_PIN, SENSOR_A01_PIN);
-    configureSlot("A02", SERVO_A02_PIN, SENSOR_A02_PIN);
-    initDoorSensors();
     return false;
   }
-  initDoorSensors();
-  Serial.printf("[CONFIG] Loaded %d hardware slot(s).\n", getConfiguredSlotCount());
+  if (!preferencesReady) preferencesReady = preferences.begin("findbox", false);
+  if (preferencesReady) {
+    String persisted;
+    serializeJson(slots, persisted);
+    if (preferences.getString("slots", "") != persisted) {
+      preferences.putString("slots", persisted);
+      Serial.println("[CONFIG] Persisted updated device config.");
+    }
+  }
   return true;
 }
 
@@ -85,6 +169,7 @@ void sendHeartbeat() {
   HTTPClient http;
   String url = String(BACKEND_BASE_URL) + "/heartbeat";
   http.begin(url);
+  configureHttp(http);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
@@ -106,6 +191,7 @@ void sendHeartbeat() {
   serializeJson(doc, requestBody);
 
   int httpCode = http.POST(requestBody);
+  recordBackendRequest(httpCode > 0);
   if (httpCode == HTTP_CODE_OK) {
     Serial.printf("[HEARTBEAT] Sent OK (RSSI: %d, slots: %d)\n",
                   getWiFiRSSI(), getConfiguredSlotCount());
@@ -122,9 +208,11 @@ void pollNextCommand() {
   HTTPClient http;
   String url = String(BACKEND_BASE_URL) + "/commands/next";
   http.begin(url);
+  configureHttp(http);
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
   int httpCode = http.GET();
+  recordBackendRequest(httpCode > 0);
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
 

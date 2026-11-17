@@ -45,5 +45,11 @@
 // Chu kỳ Polling và Heartbeat
 #define HEARTBEAT_INTERVAL_MS 10000   // Gửi heartbeat mỗi 10 giây
 #define COMMAND_POLL_INTERVAL_MS 1500 // Kiểm tra lệnh mỗi 1.5 giây
+#define CONFIG_SYNC_INTERVAL_MS 60000 // Đồng bộ cấu hình nóng mỗi 60 giây
+#define HTTP_CONNECT_TIMEOUT_MS 4000
+#define HTTP_RESPONSE_TIMEOUT_MS 6000
+#define WIFI_RECONNECT_INTERVAL_MS 30000
+#define ACK_RETRY_INTERVAL_MS 5000
+#define MAX_PENDING_ACKS 8
 
 #endif

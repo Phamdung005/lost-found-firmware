@@ -2,7 +2,7 @@
 #include "config.h"
 #include "lcd.h"
 #include "locker.h"
-#include "network.h"
+#include "findbox_network.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
@@ -102,6 +102,8 @@ static void verifyOtpWithServer(const String& slot, const String& otp) {
   HTTPClient http;
   String url = String(BACKEND_BASE_URL) + "/verify-otp";
   http.begin(url);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_RESPONSE_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
@@ -114,6 +116,7 @@ static void verifyOtpWithServer(const String& slot, const String& otp) {
   serializeJson(reqDoc, reqBody);
 
   int httpCode = http.POST(reqBody);
+  recordBackendRequest(httpCode > 0);
   String response = http.getString();
   http.end();
 
