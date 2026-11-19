@@ -4,6 +4,8 @@
 #include <Arduino.h>
 
 void initDoorSensors();
+void configureDoorSensor(const String& slotCode, int sensorPin);
+String getDoorStatus(const String& slotCode);
 String getDoorStatusA01();
 String getDoorStatusA02();
 

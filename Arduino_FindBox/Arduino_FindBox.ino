@@ -6,12 +6,14 @@
 #include "command_handler.h"
 #include "keypad.h"
 #include "lcd.h"
+#include "device_config.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
 static unsigned long lastHeartbeatTime = 0;
 static unsigned long lastPollTime = 0;
 static unsigned long lastWiFiCheckTime = 0;
+static unsigned long lastDeviceConfigSyncTime = 0;
 
 void setup() {
   // Tắt bộ phát hiện sụt nguồn (Brownout Detector) của ESP32 để ngăn CPU tự reset khi servo khởi động
@@ -30,6 +32,7 @@ void setup() {
   // 2. Khởi tạo phần cứng (Servo, Cảm biến, Keypad)
   initLockers();      // Servo SG90 GPIO 18 (A01), GPIO 19 (A02)
   initDoorSensors();  // Cảm biến cửa từ GPIO 4 (A01), GPIO 5 (A02)
+  initDeviceConfig(); // Mặc định dự phòng; sau đó tải cấu hình từ Admin
   initKeypad();       // Bàn phím ma trận 4x4
 
   // 3. Kết nối Wi-Fi
@@ -40,6 +43,8 @@ void setup() {
   if (isWiFiConnected()) {
     lcdShowWiFiConnected(getWiFiIP());
     delay(1500);
+    syncDeviceConfig();
+    lastDeviceConfigSyncTime = millis();
     sendHeartbeat();
   }
 
@@ -67,6 +72,12 @@ void loop() {
     }
   }
 
+  // Admin thêm/sửa ngăn và GPIO trên app -> ESP32 tự nhận cấu hình mới.
+  if (now - lastDeviceConfigSyncTime >= 60000) {
+    lastDeviceConfigSyncTime = now;
+    if (isWiFiConnected()) syncDeviceConfig();
+  }
+
   // 4. Polling lấy lệnh mở ngăn từ Backend (Mỗi 1.5 giây)
   if (now - lastPollTime >= COMMAND_POLL_INTERVAL_MS) {
     lastPollTime = now;
@@ -76,21 +87,25 @@ void loop() {
   }
 
   // 5. Kiểm tra cảm biến cửa thay đổi trạng thái -> GỬI CẬP NHẬT NGAY LẬP TỨC (Realtime)
-  static String lastSentDoorA01 = "";
-  static String lastSentDoorA02 = "";
+  static String lastSentDoorStatus[MAX_DEVICE_SLOTS];
   static unsigned long lastDoorCheckTime = 0;
 
-  String curDoorA01 = getDoorStatusA01();
-  String curDoorA02 = getDoorStatusA02();
+  bool doorChanged = false;
+  for (int i = 0; i < getConfiguredSlotCount(); i++) {
+    const DeviceSlotConfig* config = getDeviceSlotConfig(i);
+    if (!config) continue;
+    const String currentStatus = getDoorStatus(config->slotCode);
+    if (currentStatus != lastSentDoorStatus[i]) {
+      lastSentDoorStatus[i] = currentStatus;
+      doorChanged = true;
+    }
+  }
 
-  if ((curDoorA01 != lastSentDoorA01 || curDoorA02 != lastSentDoorA02) && (now - lastDoorCheckTime >= 600)) {
+  if (doorChanged && (now - lastDoorCheckTime >= 600)) {
     lastDoorCheckTime = now;
-    lastSentDoorA01 = curDoorA01;
-    lastSentDoorA02 = curDoorA02;
     lastHeartbeatTime = now; // Reset lại timer heartbeat
     if (isWiFiConnected()) {
-      Serial.printf("[DOOR REALTIME] Cua thay doi (A01: %s, A02: %s) -> Gui cap nhat ngay lap tuc!\n",
-                    curDoorA01.c_str(), curDoorA02.c_str());
+      Serial.println("[DOOR REALTIME] Door state changed -> sending heartbeat immediately.");
       sendHeartbeat();
     }
   }

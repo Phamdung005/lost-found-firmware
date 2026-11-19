@@ -2,6 +2,7 @@
 #include "config.h"
 #include "locker.h"
 #include "door_sensor.h"
+#include "device_config.h"
 #include "network.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -47,7 +48,7 @@ void processPendingCommandAcks() {
   String result = success
     ? ("Door cycle completed for slot " + activeCommand.slotCode)
     : ("Door cycle failed for slot " + activeCommand.slotCode);
-  String doorStatus = activeCommand.slotCode == "A01" ? getDoorStatusA01() : getDoorStatusA02();
+  String doorStatus = getDoorStatus(activeCommand.slotCode);
   sendAck(activeCommand.commandId, success, result, doorStatus);
   activeCommand = {false, 0, ""};
 }
@@ -61,29 +62,26 @@ void sendHeartbeat() {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<2048> doc;
   doc["wifi_rssi"] = getWiFiRSSI();
   doc["firmware_version"] = "v1.2.0";
 
   JsonArray slots = doc.createNestedArray("slots");
-
-  JsonObject slot1 = slots.createNestedObject();
-  slot1["slot_code"] = "A01";
-  slot1["door_status"] = getDoorStatusA01();
-
-  JsonObject slot2 = slots.createNestedObject();
-  slot2["slot_code"] = "A02";
-  slot2["door_status"] = getDoorStatusA02();
+  for (int i = 0; i < getConfiguredSlotCount(); i++) {
+    const DeviceSlotConfig* config = getDeviceSlotConfig(i);
+    if (!config) continue;
+    JsonObject slot = slots.createNestedObject();
+    slot["slot_code"] = config->slotCode;
+    slot["door_status"] = getDoorStatus(config->slotCode);
+  }
 
   String requestBody;
   serializeJson(doc, requestBody);
 
   int httpCode = http.POST(requestBody);
   if (httpCode == HTTP_CODE_OK) {
-    Serial.printf("[HEARTBEAT] Sent OK (RSSI: %d, A01: %s, A02: %s)\n",
-                  getWiFiRSSI(),
-                  getDoorStatusA01().c_str(),
-                  getDoorStatusA02().c_str());
+    Serial.printf("[HEARTBEAT] Sent OK (RSSI: %d, slots: %d)\n",
+                  getWiFiRSSI(), getConfiguredSlotCount());
   } else {
     Serial.printf("[HEARTBEAT] Failed with HTTP code: %d\n", httpCode);
   }
@@ -131,7 +129,7 @@ void pollNextCommand() {
         activeCommand = {true, cmdId, slotCode};
         Serial.printf("[COMMAND] #%d waiting for sensor cycle on %s.\n", cmdId, slotCode.c_str());
       } else {
-        String currentDoorStatus = (slotCode == "A01") ? getDoorStatusA01() : getDoorStatusA02();
+        String currentDoorStatus = getDoorStatus(slotCode);
         sendAck(cmdId, ok, resultMsg, currentDoorStatus);
       }
     }
