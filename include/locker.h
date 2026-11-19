@@ -18,5 +18,6 @@ const SlotConfig* getSlotConfig(int index);
 const SlotConfig* findSlotConfig(const String& slotCode);
 bool openSlot(const String& slotCode, int durationMs = 5000);
 void updateLockerServos();
+bool takeSlotCycleResult(const String& slotCode, bool& success);
 
 #endif

@@ -11,12 +11,18 @@ enum SlotState {
   SLOT_LOCKING
 };
 
+enum SlotCycleResult {
+  SLOT_CYCLE_NONE,
+  SLOT_CYCLE_SUCCESS,
+};
+
 struct SlotController {
   SlotConfig config;
   Servo servo;
   SlotState state;
   unsigned long timer;
   bool doorEverOpened;
+  SlotCycleResult cycleResult;
 };
 
 static const int MAX_CONFIGURED_SLOTS = 12;
@@ -80,6 +86,7 @@ bool configureSlot(const String& slotCode, int servoPin, int sensorPin) {
   controller.state = SLOT_IDLE;
   controller.timer = 0;
   controller.doorEverOpened = false;
+  controller.cycleResult = SLOT_CYCLE_NONE;
   controller.servo.setPeriodHertz(50);
   return true;
 }
@@ -108,6 +115,7 @@ bool openSlot(const String& slotCode, int durationMs) {
     controller.state = SLOT_UNLOCKING;
     controller.timer = now + 500;
     controller.doorEverOpened = false;
+    controller.cycleResult = SLOT_CYCLE_NONE;
     Serial.printf("[LOCKER] Slot %s -> unlock on GPIO %d.\n", slotCode.c_str(), config->servoPin);
     (void)durationMs;
     return true;
@@ -126,11 +134,13 @@ void updateLockerServos() {
     if (controller.state == SLOT_UNLOCKING && now >= controller.timer) {
       controller.servo.detach();
       controller.state = SLOT_WAITING_DOOR_CLOSE;
-      controller.timer = now + 1500;
+      // Do not use a countdown to lock. The door must first be observed open
+      // and then closed by the reed sensor.
+      controller.timer = 0;
       lcdShowWaitingDoorClose(slotCode);
     } else if (controller.state == SLOT_WAITING_DOOR_CLOSE) {
       if (doorStatus == "open") controller.doorEverOpened = true;
-      if (doorStatus == "closed" && (controller.doorEverOpened || now >= controller.timer)) {
+      if (doorStatus == "closed" && controller.doorEverOpened) {
         controller.servo.attach(controller.config.servoPin, 544, 2400);
         controller.servo.write(SERVO_LOCK_ANGLE);
         controller.state = SLOT_LOCKING;
@@ -140,8 +150,20 @@ void updateLockerServos() {
     } else if (controller.state == SLOT_LOCKING && now >= controller.timer) {
       controller.servo.detach();
       controller.state = SLOT_IDLE;
+      controller.cycleResult = SLOT_CYCLE_SUCCESS;
       delay(1200);
       lcdShowSelectSlot();
     }
   }
+}
+
+bool takeSlotCycleResult(const String& slotCode, bool& success) {
+  for (int i = 0; i < configuredSlotCount; i++) {
+    SlotController& controller = controllers[i];
+    if (controller.config.slotCode != slotCode || controller.cycleResult == SLOT_CYCLE_NONE) continue;
+    success = controller.cycleResult == SLOT_CYCLE_SUCCESS;
+    controller.cycleResult = SLOT_CYCLE_NONE;
+    return true;
+  }
+  return false;
 }

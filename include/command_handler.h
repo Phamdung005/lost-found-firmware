@@ -8,5 +8,6 @@ void pollNextCommand();
 bool loadDeviceConfig();
 bool loadPersistedDeviceConfig();
 void flushPendingAcks();
+void processPendingCommandAcks();
 
 #endif

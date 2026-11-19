@@ -61,6 +61,7 @@ void loop() {
 
   // 1. Cập nhật trạng thái servo (tự khóa lại sau khi mở)
   updateLockerServos();
+  processPendingCommandAcks();
 
   // 2. Cập nhật keypad
   updateKeypad();

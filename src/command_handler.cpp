@@ -16,6 +16,12 @@ struct PendingAck {
 };
 
 static PendingAck pendingAcks[MAX_PENDING_ACKS];
+struct ActiveCommand {
+  bool used;
+  int commandId;
+  String slotCode;
+};
+static ActiveCommand activeCommand{false, 0, ""};
 static Preferences preferences;
 static bool preferencesReady = false;
 
@@ -87,6 +93,18 @@ void flushPendingAcks() {
       break;
     }
   }
+}
+
+void processPendingCommandAcks() {
+  if (!activeCommand.used) return;
+  bool success = false;
+  if (!takeSlotCycleResult(activeCommand.slotCode, success)) return;
+
+  String result = success
+    ? ("Door cycle completed for slot " + activeCommand.slotCode)
+    : ("Door cycle failed for slot " + activeCommand.slotCode);
+  sendAck(activeCommand.commandId, success, result, getDoorStatus(activeCommand.slotCode));
+  activeCommand = {false, 0, ""};
 }
 
 static bool applyConfig(JsonArray slots) {
@@ -204,6 +222,7 @@ void sendHeartbeat() {
 
 void pollNextCommand() {
   if (!isWiFiConnected()) return;
+  if (activeCommand.used || isAnySlotBusy()) return;
 
   HTTPClient http;
   String url = String(BACKEND_BASE_URL) + "/commands/next";
@@ -225,6 +244,7 @@ void pollNextCommand() {
       String cmdType = cmd["command_type"].as<String>();
       String slotCode = cmd["slot_code"].as<String>();
       int durationMs = cmd["parameters"]["duration_ms"] | SERVO_AUTO_LOCK_DELAY_MS;
+      bool doorCycleRequired = cmd["parameters"]["door_cycle_required"] | false;
 
       Serial.printf("[COMMAND] Received #%d: %s on %s\n", cmdId, cmdType.c_str(), slotCode.c_str());
 
@@ -238,8 +258,13 @@ void pollNextCommand() {
         resultMsg = "Unsupported command type: " + cmdType;
       }
 
-      String currentDoorStatus = getDoorStatus(slotCode);
-      sendAck(cmdId, ok, resultMsg, currentDoorStatus);
+      if (ok && doorCycleRequired) {
+        activeCommand = {true, cmdId, slotCode};
+        Serial.printf("[COMMAND] #%d waiting for sensor cycle on %s.\n", cmdId, slotCode.c_str());
+      } else {
+        String currentDoorStatus = getDoorStatus(slotCode);
+        sendAck(cmdId, ok, resultMsg, currentDoorStatus);
+      }
     }
   }
 

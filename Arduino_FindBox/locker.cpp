@@ -11,16 +11,23 @@ enum SlotState {
   SLOT_LOCKING               // Cửa đã đóng -> Cấp điện quay servo về 0 độ (500ms) -> ngắt điện
 };
 
+enum SlotCycleResult {
+  SLOT_CYCLE_NONE,
+  SLOT_CYCLE_SUCCESS,
+};
+
 static Servo servoA01;
 static Servo servoA02;
 
 static SlotState stateA01 = SLOT_IDLE;
 static unsigned long timerA01 = 0;
 static bool doorEverOpenedA01 = false;
+static SlotCycleResult cycleResultA01 = SLOT_CYCLE_NONE;
 
 static SlotState stateA02 = SLOT_IDLE;
 static unsigned long timerA02 = 0;
 static bool doorEverOpenedA02 = false;
+static SlotCycleResult cycleResultA02 = SLOT_CYCLE_NONE;
 
 void initLockers() {
   ESP32PWM::allocateTimer(0);
@@ -33,8 +40,14 @@ void initLockers() {
 
   stateA01 = SLOT_IDLE;
   stateA02 = SLOT_IDLE;
+  cycleResultA01 = SLOT_CYCLE_NONE;
+  cycleResultA02 = SLOT_CYCLE_NONE;
 
   Serial.println("[LOCKER] Initialized servos for A01 (GPIO 18) and A02 (GPIO 19).");
+}
+
+bool isAnySlotBusy() {
+  return stateA01 != SLOT_IDLE || stateA02 != SLOT_IDLE;
 }
 
 bool openSlot(const String& slotCode, int durationMs) {
@@ -48,6 +61,7 @@ bool openSlot(const String& slotCode, int durationMs) {
     stateA01 = SLOT_UNLOCKING;
     timerA01 = now + 500; // Cấp điện 500ms để servo quay trọn vẹn đến 90 độ
     doorEverOpenedA01 = false;
+    cycleResultA01 = SLOT_CYCLE_NONE;
 
     Serial.printf("[LOCKER] Slot A01 -> Xoay mo (%d deg)...\n", SERVO_UNLOCK_ANGLE);
     return true;
@@ -58,6 +72,7 @@ bool openSlot(const String& slotCode, int durationMs) {
     stateA02 = SLOT_UNLOCKING;
     timerA02 = now + 500;
     doorEverOpenedA02 = false;
+    cycleResultA02 = SLOT_CYCLE_NONE;
 
     Serial.printf("[LOCKER] Slot A02 -> Xoay mo (%d deg)...\n", SERVO_UNLOCK_ANGLE);
     return true;
@@ -77,7 +92,8 @@ void updateLockerServos() {
     if (now >= timerA01) {
       servoA01.detach(); // Ngắt điện hoàn toàn (0mA, không nóng motor, chống sụt áp)
       stateA01 = SLOT_WAITING_DOOR_CLOSE;
-      timerA01 = now + 1500; // Đặt mốc tối thiểu 1.5s trước khi cho phép khóa lại
+      // Không dùng countdown để khóa; phải ghi nhận open rồi closed.
+      timerA01 = 0;
       
       lcdShowWaitingDoorClose("A01");
       Serial.println("[LOCKER] Slot A01 da mo (90 deg). Detached servo. Dang cho dong cua...");
@@ -92,7 +108,7 @@ void updateLockerServos() {
 
     // Khi người dùng khép cửa lại (cảm biến báo closed) và đã qua ít nhất 1.5s
     // Hoặc nếu đang test chưa mở mà khép nam châm vào sau 1.5s
-    if (doorStatus == "closed" && (doorEverOpenedA01 || now >= timerA01)) {
+    if (doorStatus == "closed" && doorEverOpenedA01) {
       Serial.println("[LOCKER] Cua A01 da DONG! Bat dau quay khoa ve 0 deg...");
       
       servoA01.attach(SERVO_A01_PIN, 544, 2400);
@@ -106,6 +122,7 @@ void updateLockerServos() {
     if (now >= timerA01) {
       servoA01.detach(); // Đã khóa xong -> ngắt điện hoàn toàn!
       stateA01 = SLOT_IDLE;
+      cycleResultA01 = SLOT_CYCLE_SUCCESS;
       Serial.println("[LOCKER] Slot A01 DA KHOA XONG. Ngat dien hoan toan.");
       delay(1200);
       lcdShowSelectSlot(); // Làm mới lại LCD về màn hình chọn ngăn
@@ -119,7 +136,7 @@ void updateLockerServos() {
     if (now >= timerA02) {
       servoA02.detach();
       stateA02 = SLOT_WAITING_DOOR_CLOSE;
-      timerA02 = now + 1500;
+      timerA02 = 0;
       
       lcdShowWaitingDoorClose("A02");
       Serial.println("[LOCKER] Slot A02 da mo (90 deg). Detached servo. Dang cho dong cua...");
@@ -131,7 +148,7 @@ void updateLockerServos() {
       doorEverOpenedA02 = true;
     }
 
-    if (doorStatus == "closed" && (doorEverOpenedA02 || now >= timerA02)) {
+    if (doorStatus == "closed" && doorEverOpenedA02) {
       Serial.println("[LOCKER] Cua A02 da DONG! Bat dau quay khoa ve 0 deg...");
       
       servoA02.attach(SERVO_A02_PIN, 544, 2400);
@@ -145,9 +162,24 @@ void updateLockerServos() {
     if (now >= timerA02) {
       servoA02.detach();
       stateA02 = SLOT_IDLE;
+      cycleResultA02 = SLOT_CYCLE_SUCCESS;
       Serial.println("[LOCKER] Slot A02 DA KHOA XONG. Ngat dien hoan toan.");
       delay(1200);
       lcdShowSelectSlot();
     }
   }
+}
+
+bool takeSlotCycleResult(const String& slotCode, bool& success) {
+  if (slotCode == "A01" && cycleResultA01 != SLOT_CYCLE_NONE) {
+    success = cycleResultA01 == SLOT_CYCLE_SUCCESS;
+    cycleResultA01 = SLOT_CYCLE_NONE;
+    return true;
+  }
+  if (slotCode == "A02" && cycleResultA02 != SLOT_CYCLE_NONE) {
+    success = cycleResultA02 == SLOT_CYCLE_SUCCESS;
+    cycleResultA02 = SLOT_CYCLE_NONE;
+    return true;
+  }
+  return false;
 }
