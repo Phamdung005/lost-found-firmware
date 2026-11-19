@@ -14,6 +14,7 @@ enum SlotState {
 enum SlotCycleResult {
   SLOT_CYCLE_NONE,
   SLOT_CYCLE_SUCCESS,
+  SLOT_CYCLE_FAILED,
 };
 
 struct SlotController {
@@ -23,6 +24,7 @@ struct SlotController {
   unsigned long timer;
   bool doorEverOpened;
   SlotCycleResult cycleResult;
+  unsigned long closeDeadline;
 };
 
 static const int MAX_CONFIGURED_SLOTS = 12;
@@ -87,6 +89,7 @@ bool configureSlot(const String& slotCode, int servoPin, int sensorPin) {
   controller.timer = 0;
   controller.doorEverOpened = false;
   controller.cycleResult = SLOT_CYCLE_NONE;
+  controller.closeDeadline = 0;
   controller.servo.setPeriodHertz(50);
   return true;
 }
@@ -116,6 +119,7 @@ bool openSlot(const String& slotCode, int durationMs) {
     controller.timer = now + 500;
     controller.doorEverOpened = false;
     controller.cycleResult = SLOT_CYCLE_NONE;
+    controller.closeDeadline = now + (durationMs < 120000 ? 120000UL : (unsigned long)durationMs);
     Serial.printf("[LOCKER] Slot %s -> unlock on GPIO %d.\n", slotCode.c_str(), config->servoPin);
     (void)durationMs;
     return true;
@@ -146,6 +150,10 @@ void updateLockerServos() {
         controller.state = SLOT_LOCKING;
         controller.timer = now + 500;
         lcdShowDoorLocked(slotCode);
+      } else if (controller.closeDeadline != 0 && (long)(now - controller.closeDeadline) >= 0) {
+        controller.state = SLOT_IDLE;
+        controller.cycleResult = SLOT_CYCLE_FAILED;
+        Serial.printf("[LOCKER] Slot %s sensor cycle timed out; leaving latch unlocked.\n", slotCode.c_str());
       }
     } else if (controller.state == SLOT_LOCKING && now >= controller.timer) {
       controller.servo.detach();

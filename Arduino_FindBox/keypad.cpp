@@ -32,6 +32,33 @@ static int failedAttempts = 0;
 static bool isLockedOut = false;
 static unsigned long lockoutUntil = 0;
 static unsigned long lastCountdownUpdate = 0;
+static int pendingClaimId = 0;
+static String pendingClaimSlot = "";
+
+static void completeKeypadCycleIfReady() {
+  if (pendingClaimId <= 0 || !isWiFiConnected()) return;
+  bool cycleSuccess = false;
+  if (!takeSlotCycleResult(pendingClaimSlot, cycleSuccess)) return;
+
+  HTTPClient http;
+  String url = String(BACKEND_BASE_URL) + "/keypad/complete";
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Token", DEVICE_TOKEN);
+  StaticJsonDocument<192> doc;
+  doc["claim_id"] = pendingClaimId;
+  doc["status"] = cycleSuccess ? "success" : "failed";
+  doc["door_status"] = pendingClaimSlot == "A01" ? getDoorStatusA01() : getDoorStatusA02();
+  String body;
+  serializeJson(doc, body);
+  int code = http.POST(body);
+  http.end();
+  Serial.printf("[KEYPAD] Completion report for claim #%d: HTTP %d\n", pendingClaimId, code);
+  if (code == HTTP_CODE_OK || code == 201) {
+    pendingClaimId = 0;
+    pendingClaimSlot = "";
+  }
+}
 
 // Hàm quét ma trận phím trực tiếp
 static char scanKeypadMatrix() {
@@ -126,6 +153,8 @@ static void verifyOtpWithServer(const String& slot, const String& otp) {
     if (resDoc["success"]) {
       String openSlotCode = resDoc["data"]["slot_code"].as<String>();
       if (openSlotCode.length() == 0) openSlotCode = slot;
+      pendingClaimId = resDoc["data"]["claim_id"] | 0;
+      pendingClaimSlot = openSlotCode;
       failedAttempts = 0;
 
       Serial.printf("[KEYPAD] OTP hop le! Mo ngan %s\n", openSlotCode.c_str());
@@ -170,6 +199,7 @@ void initKeypad() {
 
 void updateKeypad() {
   unsigned long now = millis();
+  completeKeypadCycleIfReady();
   if (isLockedOut) {
     if(now < lockoutUntil) {
       if(now - lastCountdownUpdate >= 1000) {

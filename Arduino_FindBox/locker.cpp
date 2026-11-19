@@ -14,6 +14,7 @@ enum SlotState {
 enum SlotCycleResult {
   SLOT_CYCLE_NONE,
   SLOT_CYCLE_SUCCESS,
+  SLOT_CYCLE_FAILED,
 };
 
 static Servo servoA01;
@@ -23,11 +24,13 @@ static SlotState stateA01 = SLOT_IDLE;
 static unsigned long timerA01 = 0;
 static bool doorEverOpenedA01 = false;
 static SlotCycleResult cycleResultA01 = SLOT_CYCLE_NONE;
+static unsigned long closeDeadlineA01 = 0;
 
 static SlotState stateA02 = SLOT_IDLE;
 static unsigned long timerA02 = 0;
 static bool doorEverOpenedA02 = false;
 static SlotCycleResult cycleResultA02 = SLOT_CYCLE_NONE;
+static unsigned long closeDeadlineA02 = 0;
 
 void initLockers() {
   ESP32PWM::allocateTimer(0);
@@ -42,6 +45,8 @@ void initLockers() {
   stateA02 = SLOT_IDLE;
   cycleResultA01 = SLOT_CYCLE_NONE;
   cycleResultA02 = SLOT_CYCLE_NONE;
+  closeDeadlineA01 = 0;
+  closeDeadlineA02 = 0;
 
   Serial.println("[LOCKER] Initialized servos for A01 (GPIO 18) and A02 (GPIO 19).");
 }
@@ -62,6 +67,7 @@ bool openSlot(const String& slotCode, int durationMs) {
     timerA01 = now + 500; // Cấp điện 500ms để servo quay trọn vẹn đến 90 độ
     doorEverOpenedA01 = false;
     cycleResultA01 = SLOT_CYCLE_NONE;
+    closeDeadlineA01 = now + (durationMs < 120000 ? 120000UL : (unsigned long)durationMs);
 
     Serial.printf("[LOCKER] Slot A01 -> Xoay mo (%d deg)...\n", SERVO_UNLOCK_ANGLE);
     return true;
@@ -73,6 +79,7 @@ bool openSlot(const String& slotCode, int durationMs) {
     timerA02 = now + 500;
     doorEverOpenedA02 = false;
     cycleResultA02 = SLOT_CYCLE_NONE;
+    closeDeadlineA02 = now + (durationMs < 120000 ? 120000UL : (unsigned long)durationMs);
 
     Serial.printf("[LOCKER] Slot A02 -> Xoay mo (%d deg)...\n", SERVO_UNLOCK_ANGLE);
     return true;
@@ -117,6 +124,10 @@ void updateLockerServos() {
       stateA01 = SLOT_LOCKING;
       timerA01 = now + 500; // Cấp điện 500ms để servo quay về vị trí khóa
       lcdShowDoorLocked("A01");
+    } else if (closeDeadlineA01 != 0 && (long)(now - closeDeadlineA01) >= 0) {
+      stateA01 = SLOT_IDLE;
+      cycleResultA01 = SLOT_CYCLE_FAILED;
+      Serial.println("[LOCKER] Slot A01 sensor cycle timed out; latch remains unlocked.");
     }
   } else if (stateA01 == SLOT_LOCKING) {
     if (now >= timerA01) {
@@ -157,6 +168,10 @@ void updateLockerServos() {
       stateA02 = SLOT_LOCKING;
       timerA02 = now + 500;
       lcdShowDoorLocked("A02");
+    } else if (closeDeadlineA02 != 0 && (long)(now - closeDeadlineA02) >= 0) {
+      stateA02 = SLOT_IDLE;
+      cycleResultA02 = SLOT_CYCLE_FAILED;
+      Serial.println("[LOCKER] Slot A02 sensor cycle timed out; latch remains unlocked.");
     }
   } else if (stateA02 == SLOT_LOCKING) {
     if (now >= timerA02) {
