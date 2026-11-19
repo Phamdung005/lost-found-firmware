@@ -2,6 +2,7 @@
 #include "config.h"
 #include "lcd.h"
 #include "locker.h"
+#include "door_sensor.h"
 #include "network.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
