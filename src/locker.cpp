@@ -31,10 +31,18 @@ static const int MAX_CONFIGURED_SLOTS = 12;
 static SlotController controllers[MAX_CONFIGURED_SLOTS];
 static int configuredSlotCount = 0;
 
-static int servoAngleFor(const String& slotCode, bool unlocking) {
-  // A01 and A02 are mirrored: A01 uses the opposite safe direction.
-  if (slotCode == "A01") return unlocking ? 80 : 10;
+static int servoPulseFor(const String& slotCode, bool unlocking) {
+  // A01 is continuous rotation and must be controlled by pulse width.
+  if (slotCode == "A01") return unlocking ? SERVO_A01_OPEN_US : SERVO_A01_CLOSE_US;
   return unlocking ? 10 : 80;
+}
+
+static void stopServoIfContinuous(const String& slotCode, Servo& servo) {
+  if (slotCode == "A01") servo.writeMicroseconds(SERVO_A01_STOP_US);
+}
+
+static void releaseServoIfPositional(const String& slotCode, Servo& servo) {
+  if (slotCode != "A01") servo.detach();
 }
 
 int getConfiguredSlotCount() {
@@ -120,9 +128,11 @@ bool openSlot(const String& slotCode, int durationMs) {
 
     unsigned long now = millis();
     controller.servo.attach(config->servoPin, 544, 2400);
-    controller.servo.write(servoAngleFor(slotCode, true));
+    const int unlockValue = servoPulseFor(slotCode, true);
+    if (slotCode == "A01") controller.servo.writeMicroseconds(unlockValue);
+    else controller.servo.write(unlockValue);
     controller.state = SLOT_UNLOCKING;
-    controller.timer = now + 500;
+    controller.timer = now + (slotCode == "A01" ? SERVO_A01_OPEN_TIME_MS : 500);
     controller.doorEverOpened = false;
     controller.cycleResult = SLOT_CYCLE_NONE;
     controller.closeDeadline = now + (durationMs < 120000 ? 120000UL : (unsigned long)durationMs);
@@ -142,7 +152,8 @@ void updateLockerServos() {
     const String doorStatus = getDoorStatus(slotCode);
 
     if (controller.state == SLOT_UNLOCKING && now >= controller.timer) {
-      controller.servo.detach();
+      stopServoIfContinuous(slotCode, controller.servo);
+      releaseServoIfPositional(slotCode, controller.servo);
       controller.state = SLOT_WAITING_DOOR_CLOSE;
       // Do not use a countdown to lock. The door must first be observed open
       // and then closed by the reed sensor.
@@ -152,9 +163,11 @@ void updateLockerServos() {
       if (doorStatus == "open") controller.doorEverOpened = true;
       if (doorStatus == "closed" && controller.doorEverOpened) {
         controller.servo.attach(controller.config.servoPin, 544, 2400);
-        controller.servo.write(servoAngleFor(slotCode, false));
+        const int lockValue = servoPulseFor(slotCode, false);
+        if (slotCode == "A01") controller.servo.writeMicroseconds(lockValue);
+        else controller.servo.write(lockValue);
         controller.state = SLOT_LOCKING;
-        controller.timer = now + 500;
+        controller.timer = now + (slotCode == "A01" ? SERVO_A01_CLOSE_TIME_MS : 500);
         lcdShowDoorLocked(slotCode);
       } else if (controller.closeDeadline != 0 && (long)(now - controller.closeDeadline) >= 0) {
         controller.state = SLOT_IDLE;
@@ -162,7 +175,8 @@ void updateLockerServos() {
         Serial.printf("[LOCKER] Slot %s sensor cycle timed out; leaving latch unlocked.\n", slotCode.c_str());
       }
     } else if (controller.state == SLOT_LOCKING && now >= controller.timer) {
-      controller.servo.detach();
+      stopServoIfContinuous(slotCode, controller.servo);
+      releaseServoIfPositional(slotCode, controller.servo);
       controller.state = SLOT_IDLE;
       controller.cycleResult = SLOT_CYCLE_SUCCESS;
       delay(1200);

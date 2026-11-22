@@ -40,6 +40,14 @@
 // Góc mở và khóa Servo (Mở 90 độ, Khóa 0 độ)
 #define SERVO_LOCK_ANGLE 0
 #define SERVO_UNLOCK_ANGLE 90
+#define SERVO_A01_OPEN_SPEED 120
+#define SERVO_A01_CLOSE_SPEED 60
+#define SERVO_A01_STOP_SPEED 90
+#define SERVO_A01_OPEN_US 1700
+#define SERVO_A01_CLOSE_US 1300
+#define SERVO_A01_STOP_US 1500
+#define SERVO_A01_OPEN_TIME_MS 500
+#define SERVO_A01_CLOSE_TIME_MS 500
 #define SERVO_AUTO_LOCK_DELAY_MS 5000 // (Dùng khi không có cảm biến đóng)
 
 // Chu kỳ Polling và Heartbeat
