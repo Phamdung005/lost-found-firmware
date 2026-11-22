@@ -11,6 +11,7 @@ static int configCount = 0;
 
 static void addOrUpdateConfig(const String& slotCode, int servoPin, int sensorPin) {
   if (slotCode.length() == 0 || servoPin < 0 || sensorPin < 0) return;
+  Serial.printf("[CONFIG] %s servo_gpio=%d sensor_gpio=%d\n", slotCode.c_str(), servoPin, sensorPin);
   for (int i = 0; i < configCount; i++) {
     if (configs[i].slotCode == slotCode) {
       configs[i].servoPin = servoPin;

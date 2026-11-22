@@ -17,10 +17,17 @@ struct RuntimeSlot {
   unsigned long closeDeadline;
   bool doorEverOpened;
   SlotCycleResult cycleResult;
+  String lastDoorStatus;
 };
 
 static RuntimeSlot slots[MAX_DEVICE_SLOTS];
 static int slotCount = 0;
+
+static int servoAngleFor(const String& slotCode, bool unlocking) {
+  // A01 and A02 are mirrored: A01 uses the opposite safe direction.
+  if (slotCode == "A01") return unlocking ? 80 : 10;
+  return unlocking ? 10 : 80;
+}
 
 static RuntimeSlot* findSlot(const String& slotCode) {
   for (int i = 0; i < slotCount; i++) {
@@ -45,6 +52,7 @@ void configureLockerSlot(const String& slotCode, int servoPin) {
   slot.closeDeadline = 0;
   slot.doorEverOpened = false;
   slot.cycleResult = SLOT_CYCLE_NONE;
+  slot.lastDoorStatus = "unknown";
 }
 
 void initLockers() {
@@ -74,13 +82,14 @@ bool openSlot(const String& slotCode, int durationMs) {
 
   const unsigned long now = millis();
   slot->servo.attach(slot->servoPin, 544, 2400);
-  slot->servo.write(SERVO_UNLOCK_ANGLE);
+  const int unlockAngle = servoAngleFor(slotCode, true);
+  slot->servo.write(unlockAngle);
   slot->state = SLOT_UNLOCKING;
   slot->timer = now + 500;
   slot->closeDeadline = now + (durationMs < 120000 ? 120000UL : (unsigned long)durationMs);
   slot->doorEverOpened = false;
   slot->cycleResult = SLOT_CYCLE_NONE;
-  Serial.printf("[LOCKER] Slot %s -> opening on GPIO %d...\n", slotCode.c_str(), slot->servoPin);
+  Serial.printf("[LOCKER] Slot %s -> opening on GPIO %d at %d degrees...\n", slotCode.c_str(), slot->servoPin, unlockAngle);
   return true;
 }
 
@@ -96,11 +105,17 @@ void updateLockerServos() {
       Serial.println("[LOCKER] Slot " + slot.slotCode + " opened; waiting for open/close sensor cycle.");
     } else if (slot.state == SLOT_WAITING_DOOR_CLOSE) {
       const String doorStatus = getDoorStatus(slot.slotCode);
+      if (doorStatus != slot.lastDoorStatus) {
+        Serial.printf("[DOOR] Slot %s sensor GPIO status: %s\n", slot.slotCode.c_str(), doorStatus.c_str());
+        slot.lastDoorStatus = doorStatus;
+      }
       if (doorStatus == "open") slot.doorEverOpened = true;
 
       if (doorStatus == "closed" && slot.doorEverOpened) {
         slot.servo.attach(slot.servoPin, 544, 2400);
-        slot.servo.write(SERVO_LOCK_ANGLE);
+        const int lockAngle = servoAngleFor(slot.slotCode, false);
+        slot.servo.write(lockAngle);
+        Serial.printf("[LOCKER] Slot %s -> locking at %d degrees.\n", slot.slotCode.c_str(), lockAngle);
         slot.state = SLOT_LOCKING;
         slot.timer = now + 500;
         lcdShowDoorLocked(slot.slotCode);

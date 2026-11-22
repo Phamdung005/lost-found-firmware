@@ -31,6 +31,12 @@ static const int MAX_CONFIGURED_SLOTS = 12;
 static SlotController controllers[MAX_CONFIGURED_SLOTS];
 static int configuredSlotCount = 0;
 
+static int servoAngleFor(const String& slotCode, bool unlocking) {
+  // A01 and A02 are mirrored: A01 uses the opposite safe direction.
+  if (slotCode == "A01") return unlocking ? 80 : 10;
+  return unlocking ? 10 : 80;
+}
+
 int getConfiguredSlotCount() {
   return configuredSlotCount;
 }
@@ -114,7 +120,7 @@ bool openSlot(const String& slotCode, int durationMs) {
 
     unsigned long now = millis();
     controller.servo.attach(config->servoPin, 544, 2400);
-    controller.servo.write(SERVO_UNLOCK_ANGLE);
+    controller.servo.write(servoAngleFor(slotCode, true));
     controller.state = SLOT_UNLOCKING;
     controller.timer = now + 500;
     controller.doorEverOpened = false;
@@ -146,7 +152,7 @@ void updateLockerServos() {
       if (doorStatus == "open") controller.doorEverOpened = true;
       if (doorStatus == "closed" && controller.doorEverOpened) {
         controller.servo.attach(controller.config.servoPin, 544, 2400);
-        controller.servo.write(SERVO_LOCK_ANGLE);
+        controller.servo.write(servoAngleFor(slotCode, false));
         controller.state = SLOT_LOCKING;
         controller.timer = now + 500;
         lcdShowDoorLocked(slotCode);

@@ -44,6 +44,6 @@
 
 // Chu kỳ Polling và Heartbeat
 #define HEARTBEAT_INTERVAL_MS 10000   // Gửi heartbeat mỗi 10 giây
-#define COMMAND_POLL_INTERVAL_MS 1500 // Kiểm tra lệnh mỗi 1.5 giây
+#define COMMAND_POLL_INTERVAL_MS 500 // Kiểm tra lệnh mỗi 500ms
 
 #endif

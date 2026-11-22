@@ -49,6 +49,8 @@ void processPendingCommandAcks() {
     ? ("Door cycle completed for slot " + activeCommand.slotCode)
     : ("Door cycle failed for slot " + activeCommand.slotCode);
   String doorStatus = getDoorStatus(activeCommand.slotCode);
+  Serial.printf("[COMMAND] #%d cycle result: %s, door=%s\n", activeCommand.commandId,
+                success ? "success" : "failed", doorStatus.c_str());
   sendAck(activeCommand.commandId, success, result, doorStatus);
   activeCommand = {false, 0, ""};
 }
